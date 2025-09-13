@@ -11,6 +11,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Set correct Cloud Foundry API endpoints for your region
 let cfData = {}
 // Middleware to log request details
 app.use((req, res, next) => {
@@ -114,11 +115,72 @@ app.get("/app-stats", async (req, res) => {
     }
 });
 
-// Start the server
 
+// Start the server
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
+
+// Endpoint to fetch datacenter-level aggregated metrics
+app.get("/datacenter-metrics", async (req, res) => {
+  try {
+    const cfLoginData = await loginToCF('cf', cfUsername, cfPassword);
+    if (!cfLoginData || !cfLoginData.access_token) {
+      return res.status(500).json({ error: "Failed to log in to Cloud Foundry" });
+    }
+    // Get app GUID
+    const appsUrl = `${baseApiUrl}/v2/apps?q=name:${appName}`;
+    const appsResponse = await axios({
+      method: 'get',
+      url: appsUrl,
+      headers: {
+        'Authorization': `Bearer ${cfLoginData.access_token}`,
+        'Accept': 'application/json'
+      }
+    });
+    if (appsResponse.data.resources.length === 0) {
+      return res.status(404).json({ error: `App ${appName} not found` });
+    }
+    const appResource = appsResponse.data.resources[0];
+    const appGuid = appResource.metadata.guid;
+    // Get quotas from app resource
+    const memory_quota = appResource.entity.memory || appResource.entity.memory_quota || null;
+    const disk_quota = appResource.entity.disk_quota || null;
+    // Get instance metrics
+    const statsUrl = `${baseApiUrl}/v2/apps/${appGuid}/stats`;
+    const statsResponse = await axios({
+      method: 'get',
+      url: statsUrl,
+      headers: {
+        'Authorization': `Bearer ${cfLoginData.access_token}`,
+        'Accept': 'application/json'
+      }
+    });
+    // Aggregate metrics
+    let totalCPU = 0, totalMemory = 0, totalDisk = 0, count = 0;
+    Object.values(statsResponse.data).forEach(instance => {
+      const usage = instance.stats?.usage || {};
+      if (usage.cpu != null) totalCPU += usage.cpu;
+      if (usage.memory != null) totalMemory += usage.memory;
+      if (usage.disk != null) totalDisk += usage.disk;
+      count++;
+    });
+    res.json({
+      datacenter: appName,
+      app_name: appName,
+      instance_count: count,
+      total_cpu: totalCPU,
+      total_memory: totalMemory,
+      total_disk: totalDisk,
+      memory_quota,
+      disk_quota
+    });
+  } catch (error) {
+    console.error("Error in /datacenter-metrics endpoint:", error);
+    res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
 
 axios.interceptors.request.use((req) => {
   console.log(req.baseURL);
