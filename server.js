@@ -98,7 +98,7 @@ async function getAppStats(site, token, appName) {
 }
 
 // Endpoint to fetch and return app stats
-app.get("/app-stats", async (req, res) => {
+app.get("/app-stats", async (req, res) =>{
     try {
         const cfLoginData = await loginToCF('cf', cfUsername, cfPassword);
         if (!cfLoginData || !cfLoginData.access_token) {
@@ -108,13 +108,50 @@ app.get("/app-stats", async (req, res) => {
         if (!appStats) {
             return res.status(500).json({ error: "Failed to fetch app stats" });
         }
-        res.json(appStats);
+          // Get app GUID and resource for quotas
+          const appsUrl = `${baseApiUrl}/v2/apps?q=name:${appName}`;
+          const appsResponse = await axios({
+            method: 'get',
+            url: appsUrl,
+            headers: {
+              'Authorization': `Bearer ${cfLoginData.access_token}`,
+              'Accept': 'application/json'
+            }
+          });
+          if (appsResponse.data.resources.length === 0) {
+            return res.status(404).json({ error: `App ${appName} not found` });
+          }
+          const appResource = appsResponse.data.resources[0];
+          const memory_quota = appResource.entity.memory || appResource.entity.memory_quota || null;
+          const disk_quota = appResource.entity.disk_quota || null;
+
+          // Format each instance metric
+          const formatted = Object.entries(appStats).map(([instanceId, instance]) => {
+            const stats = instance.stats || {};
+            return {
+              name: appName,
+              state: instance.state,
+              host: stats.host || null,
+              instanceGuid: stats.instance_guid || null,
+              uptime: stats.uptime || null,
+              fdsQuota: stats.fds_quota,
+              memQuota: stats.mem_quota,
+              diskQuota: stats.disk_quota,
+              log_rate_limit: stats.log_rate_limit,
+              time: stats.usage.time,
+              cpuUsage: stats.usage.cpu || null,
+              cpuEntitlement: stats.usage.cpu_entitlement,
+              memoryUsage: stats.usage.mem || null,
+              diskUsage: stats.usage.disk || null,
+              logRates: stats.log_rate_limit || null
+            };
+          });
+          res.json(formatted);
     } catch (error) {
         console.error("Error in /app-stats endpoint:", error);
         res.status(500).json({ error: "Internal Server Error" });
     }
 });
-
 
 // Start the server
 app.listen(PORT, () => {
