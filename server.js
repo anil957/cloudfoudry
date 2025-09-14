@@ -98,7 +98,7 @@ async function getAppStats(site, token, appName) {
 }
 
 // Endpoint to fetch and return app stats
-app.get("/app-stats", async (req, res) =>{
+app.get("/app-stats", async (req, res) => {
     try {
         const cfLoginData = await loginToCF('cf', cfUsername, cfPassword);
         if (!cfLoginData || !cfLoginData.access_token) {
@@ -140,9 +140,9 @@ app.get("/app-stats", async (req, res) =>{
               log_rate_limit: stats.log_rate_limit,
               time: stats.usage.time,
               cpuUsage: stats.usage.cpu || null,
-              cpuEntitlement: stats.usage.cpu_entitlement,
-              memoryUsage: stats.usage.mem || null,
-              diskUsage: stats.usage.disk || null,
+              cpuEntitlement: stats.usage.cpu_entitlement || null,
+              memoryUsage: stats.usage?.memory || null,
+              diskUsage: stats.usage?.disk || null,
               logRates: stats.log_rate_limit || null
             };
           });
@@ -152,6 +152,7 @@ app.get("/app-stats", async (req, res) =>{
         res.status(500).json({ error: "Internal Server Error" });
     }
 });
+
 
 // Start the server
 app.listen(PORT, () => {
@@ -181,8 +182,8 @@ app.get("/datacenter-metrics", async (req, res) => {
     const appResource = appsResponse.data.resources[0];
     const appGuid = appResource.metadata.guid;
     // Get quotas from app resource
-    const memory_quota = appResource.entity.memory || appResource.entity.memory_quota || null;
-    const disk_quota = appResource.entity.disk_quota || null;
+  const memory_quota = appResource.entity.memory || appResource.entity.memory_quota || appResource.entity.memory || null;
+  const disk_quota = appResource.entity.disk_quota || appResource.entity.disk || null;
     // Get instance metrics
     const statsUrl = `${baseApiUrl}/v2/apps/${appGuid}/stats`;
     const statsResponse = await axios({
@@ -193,25 +194,28 @@ app.get("/datacenter-metrics", async (req, res) => {
         'Accept': 'application/json'
       }
     });
-    // Aggregate metrics
-    let totalCPU = 0, totalMemory = 0, totalDisk = 0, count = 0;
-    Object.values(statsResponse.data).forEach(instance => {
-      const usage = instance.stats?.usage || {};
-      if (usage.cpu != null) totalCPU += usage.cpu;
-      if (usage.memory != null) totalMemory += usage.memory;
-      if (usage.disk != null) totalDisk += usage.disk;
-      count++;
+    // Format each instance metric like /app-stats
+    const formatted = Object.entries(statsResponse.data).map(([instanceId, instance]) => {
+      const stats = instance.stats || {};
+      return {
+        name: appName,
+        state: instance.state,
+        host: stats.host || null,
+        instanceGuid: stats.instance_guid,
+        uptime: stats.uptime || null,
+        fdsQuota: stats.fds_quota  || null,
+        memQuota: stats.limits?.mem || memory_quota,
+        diskQuota: stats.limits?.disk || disk_quota,
+        log_rate_limit: stats.log_rate_limit || null,
+        time: stats.usage.time || null,
+        cpuUsage: stats.usage?.cpu || null,
+        cpuEntitlement: stats.usage?.cpu_entitlement || null,
+        memoryUsage: stats.usage?.mem  || null,
+        diskUsage: stats.usage?.disk || null,
+        logRates: stats.log_rate_limit || null
+      };
     });
-    res.json({
-      datacenter: appName,
-      app_name: appName,
-      instance_count: count,
-      total_cpu: totalCPU,
-      total_memory: totalMemory,
-      total_disk: totalDisk,
-      memory_quota,
-      disk_quota
-    });
+    res.json(formatted);
   } catch (error) {
     console.error("Error in /datacenter-metrics endpoint:", error);
     res.status(500).json({ error: "Internal Server Error" });
